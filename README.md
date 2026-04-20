@@ -1,15 +1,15 @@
 # Mock Sportsbook Provider
 
-Standalone Node.js service that emulates a Betinvest-style sportsbook feed over raw TCP plus a tiny HTTP control surface for manual testing.
+Standalone Node.js service that generates a continuous stream of simulated sportsbook events, markets, and odds. It exposes a **TCP feed** (JSON-line protocol) and an **HTTP API** for control and inspection.
 
 ## Run
 
 ```bash
 npm install
-npm run start
+npm start
 ```
 
-Development mode:
+Development mode (auto-restart on changes):
 
 ```bash
 npm run dev
@@ -21,72 +21,70 @@ Smoke test:
 npm test
 ```
 
-## Aggregator Wiring
-
-Point the VLR Game Aggregator at this mock with:
-
-```properties
-betinvest.host=localhost
-betinvest.port=7887
-betinvest.app_key=anything
-```
-
-The mock accepts any `app_key` and replies with `connect.success` after the TCP handshake.
-
 ## Configuration
 
+Environment variables with defaults:
+
 ```bash
-MOCK_TCP_PORT=7887
-MOCK_HTTP_PORT=7888
-MOCK_TARGET_EVENT_COUNT=5
-MOCK_EVENT_LIFETIME_MIN_SECONDS=240
-MOCK_EVENT_LIFETIME_MAX_SECONDS=300
-MOCK_TICK_INTERVAL_MS=1000
-MOCK_CANCEL_PROBABILITY=0.07
-MOCK_SEED=
+MOCK_TCP_PORT=7887                    # TCP feed port
+MOCK_HTTP_PORT=7888                   # HTTP API port
+MOCK_TARGET_EVENT_COUNT=5             # concurrent active events
+MOCK_EVENT_LIFETIME_MIN_SECONDS=240   # min event duration
+MOCK_EVENT_LIFETIME_MAX_SECONDS=300   # max event duration
+MOCK_TICK_INTERVAL_MS=1000            # odds update tick interval
+MOCK_CANCEL_PROBABILITY=0.07          # chance an event gets canceled instead of finished
+MOCK_SEED=                            # optional, for reproducible runs
 ```
 
-## HTTP Control Surface
+---
 
-- `GET /health`
-- `GET /state`
-- `POST /scenario/spawn?count=3`
-- `POST /scenario/finish/:eventId`
-- `POST /scenario/cancel/:eventId`
-- `POST /scenario/suspend/:marketId`
-- `POST /scenario/unsuspend/:marketId`
-- `POST /scenario/odds/:outcomeId?coef=2.30`
+## TCP Feed (port 7887)
 
-## Emitted Methods
+Connect with a raw TCP client. Every message is **one JSON object per line** (`\n`-delimited).
 
-Every TCP message is one JSON object per line.
+### Handshake
 
-- `connect.success`
+After connecting, send a JSON line with an `app_key` field. Any value is accepted. The server replies:
+
 ```json
 { "method": "connect.success", "data": { "status": "ok" } }
 ```
 
-- `ping`
+### Keep-alive
+
+The server sends a `ping` every 10 seconds:
+
 ```json
 { "method": "ping", "data": { "ts": 1710000000000 } }
 ```
 
-- `event.announce`
-- `event.insert`
-- `event.update`
-- `event.set_prematch`
-- `event.set_live`
-- `event.set_finished`
-- `event.set_canceled`
-- `event.remove`
-- `market.insert`
-- `market.suspend`
-- `market.unsuspend`
-- `market.remove`
-- `outcome.insert`
-- `outcome.update`
+Idle connections with no client traffic are closed after 60 seconds.
 
-Example `event.insert`:
+### Feed Messages
+
+All feed messages follow the shape `{ "method": "<name>", "data": { ... } }`.
+
+| Method | Description |
+|---|---|
+| `event.announce` | New event created |
+| `event.insert` | Full event payload with markets and outcomes |
+| `event.update` | Event metadata changed (name, start time, score) |
+| `event.set_prematch` | Event is upcoming |
+| `event.set_live` | Event goes live |
+| `event.set_finished` | Event ended with results |
+| `event.set_canceled` | Event voided |
+| `event.remove` | Event removed |
+| `market.insert` | New market added |
+| `market.update` | Market changed |
+| `market.suspend` | Market trading suspended |
+| `market.unsuspend` | Market trading resumed |
+| `market.remove` | Market removed |
+| `outcome.insert` | New outcome added |
+| `outcome.update` | Odds changed for an outcome |
+
+### Example Payloads
+
+**`event.insert`** -- full event with nested markets and outcomes:
 
 ```json
 {
@@ -125,7 +123,7 @@ Example `event.insert`:
 }
 ```
 
-Example `outcome.update`:
+**`outcome.update`** -- odds change for a single outcome:
 
 ```json
 {
@@ -142,7 +140,7 @@ Example `outcome.update`:
 }
 ```
 
-Example `event.set_finished`:
+**`event.set_finished`** -- event result:
 
 ```json
 {
@@ -155,4 +153,49 @@ Example `event.set_finished`:
   }
 }
 ```
-# mock_sportsbook
+
+---
+
+## HTTP API (port 7888)
+
+### Dashboard
+
+`GET /dashboard` -- live auto-refreshing web UI showing all active events, markets, and odds.
+
+### Health & State
+
+| Endpoint | Description |
+|---|---|
+| `GET /health` | `{ status, connectedClients, activeEvents }` |
+| `GET /state` | Full snapshot: active events with markets, suspended markets, last tick time |
+
+### Scenario Controls
+
+Force specific states for testing:
+
+| Endpoint | Description |
+|---|---|
+| `POST /scenario/spawn?count=N` | Spawn N new events immediately |
+| `POST /scenario/finish/:eventId` | Force-finish an event with results |
+| `POST /scenario/cancel/:eventId` | Force-cancel an event |
+| `POST /scenario/suspend/:marketId` | Suspend a market |
+| `POST /scenario/unsuspend/:marketId` | Resume a market |
+| `POST /scenario/odds/:outcomeId?coef=2.30` | Set a specific odds value |
+
+---
+
+## Event Lifecycle
+
+Each simulated event follows this cycle:
+
+1. **Prematch** -- event is announced with 3-6 markets. Odds drift slightly every 1-3 seconds.
+2. **Live** -- after ~30-60 seconds the event goes live. Odds update more frequently, markets may suspend/unsuspend.
+3. **Finished/Canceled** -- after 4-5 minutes total, the event finishes with a result (or ~7% chance of cancellation).
+
+The service maintains 3-8 concurrent active events at all times, spawning replacements as events end.
+
+### Sports Covered
+
+- **Soccer** -- 1X2, Total Over/Under, Both Teams To Score, Double Chance
+- **Basketball** -- Winner, Total Points O/U, Handicap
+- **Tennis** -- Winner, Set Winner, Total Games O/U

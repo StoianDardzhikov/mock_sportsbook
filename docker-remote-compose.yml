@@ -1,0 +1,10 @@
+version: '2.0'
+
+services:
+  mock-sport-provider:
+    build: .
+    image: kpmgbg/hub:latestmocksport
+    ports:
+      - '7887:7887'
+      - '7888:7888'
+    mem_limit: 1000m
