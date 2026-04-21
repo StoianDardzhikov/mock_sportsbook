@@ -149,7 +149,16 @@ All feed messages follow the shape `{ "method": "<name>", "data": { ... } }`.
     "event_id": 3001,
     "result_id": 1,
     "result_total": 2,
-    "result_name": "Lions"
+    "result_name": "Lions",
+    "results": [
+      {
+        "market_id": 5001,
+        "market_name": "1X2",
+        "result_id": 1,
+        "result_name": "Lions",
+        "outcome_id": 6001
+      }
+    ]
   }
 }
 ```

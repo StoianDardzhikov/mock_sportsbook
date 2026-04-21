@@ -152,16 +152,66 @@ test("manual settlement endpoint finishes event with selected winner", async () 
 
     const winners = Object.fromEntries(event.markets.map((market) => [market.market_id, market.outcomes[0].outcome_id]));
     const firstWinner = event.markets[0].outcomes[0];
+    let settleResponsePromise;
 
-    const settleResponse = await fetch(`http://127.0.0.1:7928/scenario/settle/${event.event_id}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ winners })
+    const settlementMessage = await new Promise((resolve, reject) => {
+      const socket = net.createConnection({ port: 7927, host: "127.0.0.1" });
+      let buffer = "";
+      const timeout = setTimeout(() => {
+        socket.destroy();
+        reject(new Error("Timed out waiting for settlement payload"));
+      }, 5_000);
+
+      socket.on("connect", () => {
+        socket.write(`${JSON.stringify({ app_key: "test", partner_id: 1, service_id: 1 })}\n`);
+      });
+
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) {
+            continue;
+          }
+          const message = JSON.parse(line);
+          if (message.method === "connect.success") {
+            settleResponsePromise = fetch(`http://127.0.0.1:7928/scenario/settle/${event.event_id}`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ winners })
+            });
+            settleResponsePromise.catch(reject);
+            continue;
+          }
+          if (message.method !== "event.set_finished" || message.data.event_id !== event.event_id) {
+            continue;
+          }
+
+          clearTimeout(timeout);
+          socket.destroy();
+          resolve(message);
+        }
+      });
+
+      socket.on("error", reject);
     });
+
+    const settleResponse = await settleResponsePromise;
     const settleBody = await settleResponse.json();
 
     assert.equal(settleResponse.status, 200);
     assert.deepEqual(settleBody, { ok: true });
+    assert.equal(settlementMessage.data.result_id, firstWinner.outcome_type_id);
+    assert.ok(Array.isArray(settlementMessage.data.results));
+    assert.equal(settlementMessage.data.results.length, event.markets.length);
+    assert.deepEqual(settlementMessage.data.results[0], {
+      market_id: event.markets[0].market_id,
+      market_name: event.markets[0].market_name,
+      result_id: event.markets[0].outcomes[0].outcome_type_id,
+      result_name: event.markets[0].outcomes[0].outcome_name,
+      outcome_id: event.markets[0].outcomes[0].outcome_id
+    });
 
     const settledSnapshotResponse = await fetch("http://127.0.0.1:7928/state");
     const settledSnapshot = await settledSnapshotResponse.json();

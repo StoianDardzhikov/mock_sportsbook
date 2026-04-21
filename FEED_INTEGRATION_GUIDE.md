@@ -189,7 +189,16 @@ Handle this by merging the incoming fields into your stored event, but **preserv
     "event_id":3001,
     "result_id":1,
     "result_total":2,
-    "result_name":"Lions"
+    "result_name":"Lions",
+    "results":[
+      {
+        "market_id":5001,
+        "market_name":"1X2",
+        "result_id":1,
+        "result_name":"Lions",
+        "outcome_id":6001
+      }
+    ]
   }
 }
 ```
@@ -199,6 +208,7 @@ Handle this by merging the incoming fields into your stored event, but **preserv
 | `result_id` | The `outcome_type_id` of the winning outcome. Match this against your stored outcomes to determine the winner. |
 | `result_total` | A numeric result value (e.g., total goals for soccer, total points for basketball). |
 | `result_name` | Human-readable name of the winning outcome. |
+| `results` | Array of per-market settlement results. Each entry includes `market_id`, `market_name`, `result_id`, `result_name`, and `outcome_id`. |
 
 Set `status_type = "finished"` and `is_live = false`.
 
@@ -463,7 +473,7 @@ Each event gets 3-6 randomly selected market templates from its sport.
 | `event.update` | Server → Client | Event fields (markets=[] empty) | Merge into existing event, preserve markets |
 | `event.set_prematch` | Server → Client | `{ event_id }` | Set status to prematch |
 | `event.set_live` | Server → Client | `{ event_id, is_live: true }` | Set status to live |
-| `event.set_finished` | Server → Client | `{ event_id, result_id, result_total, result_name }` | Set status to finished, process result |
+| `event.set_finished` | Server → Client | `{ event_id, result_id, result_total, result_name, results[] }` | Set status to finished, process result |
 | `event.set_canceled` | Server → Client | `{ event_id }` | Set status to canceled, void all markets |
 | `event.remove` | Server → Client | `{ event_id }` | Delete event + its markets + outcomes |
 | `market.insert` | Server → Client | Full market + outcomes | Add market to event |

@@ -147,7 +147,7 @@ export class Simulator {
     }
 
     winners.sort((left, right) => left.market.market_order - right.market.market_order);
-    this.finishRuntime(runtime, false, winners[0].winner);
+    this.finishRuntime(runtime, false, winners.map(({ market, winner }) => ({ market, winner })));
     return true;
   }
 
@@ -452,7 +452,7 @@ export class Simulator {
     this.finishRuntime(runtime, false);
   }
 
-  finishRuntime(runtime, forceCleanup, preferredWinner) {
+  finishRuntime(runtime, forceCleanup, preferredResults) {
     if (!this.events.has(runtime.event.event_id)) {
       return;
     }
@@ -460,12 +460,20 @@ export class Simulator {
     runtime.event.status_type = "finished";
     runtime.event.is_live = false;
     this.clearEventTimers(runtime);
-    const winner = preferredWinner ?? this.pickWinner(runtime);
+    const results = preferredResults ?? this.pickResults(runtime);
+    const winner = results[0]?.winner ?? this.pickWinner(runtime);
     this.emit("event.set_finished", {
       event_id: runtime.event.event_id,
       result_id: winner.outcome_type_id,
       result_total: this.rng.int(0, runtime.event.sport.sport_name === "Basketball" ? 220 : 4),
-      result_name: winner.outcome_name
+      result_name: winner.outcome_name,
+      results: results.map(({ market, winner }) => ({
+        market_id: market.market_id,
+        market_name: market.market_name,
+        result_id: winner.outcome_type_id,
+        result_name: winner.outcome_name,
+        outcome_id: winner.outcome_id
+      }))
     });
     this.emit("event.update", this.cloneEvent(runtime.event, false));
     this.scheduleCleanup(runtime, forceCleanup);
@@ -486,6 +494,17 @@ export class Simulator {
 
   pickWinner(runtime) {
     const market = runtime.event.markets.find((entry) => entry.outcomes.length >= 2) ?? runtime.event.markets[0];
+    return this.pickWinnerForMarket(market);
+  }
+
+  pickResults(runtime) {
+    return runtime.event.markets
+      .filter((market) => market.outcomes.length > 0)
+      .sort((left, right) => left.market_order - right.market_order)
+      .map((market) => ({ market, winner: this.pickWinnerForMarket(market) }));
+  }
+
+  pickWinnerForMarket(market) {
     const weights = market.outcomes.map((outcome) => 1 / outcome.outcome_coef);
     const total = weights.reduce((sum, value) => sum + value, 0);
     let cursor = this.rng.next() * total;
