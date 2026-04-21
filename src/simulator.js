@@ -118,6 +118,39 @@ export class Simulator {
     return true;
   }
 
+  settleEvent(eventId, winnersByMarket) {
+    const runtime = this.events.get(eventId);
+    if (!runtime || runtime.status === "finished" || runtime.status === "canceled") {
+      return false;
+    }
+
+    const marketIds = Object.keys(winnersByMarket ?? {});
+    if (marketIds.length === 0) {
+      return false;
+    }
+
+    const winners = [];
+    for (const market of runtime.event.markets) {
+      const outcomeId = winnersByMarket[market.market_id] ?? winnersByMarket[String(market.market_id)];
+      if (outcomeId == null) {
+        continue;
+      }
+      const winner = market.outcomes.find((outcome) => outcome.outcome_id === outcomeId || outcome.outcome_id === Number(outcomeId));
+      if (!winner) {
+        return false;
+      }
+      winners.push({ market, winner });
+    }
+
+    if (winners.length === 0) {
+      return false;
+    }
+
+    winners.sort((left, right) => left.market.market_order - right.market.market_order);
+    this.finishRuntime(runtime, false, winners[0].winner);
+    return true;
+  }
+
   cancelEvent(eventId) {
     const runtime = this.events.get(eventId);
     if (!runtime || runtime.status === "finished" || runtime.status === "canceled") {
@@ -419,7 +452,7 @@ export class Simulator {
     this.finishRuntime(runtime, false);
   }
 
-  finishRuntime(runtime, forceCleanup) {
+  finishRuntime(runtime, forceCleanup, preferredWinner) {
     if (!this.events.has(runtime.event.event_id)) {
       return;
     }
@@ -427,7 +460,7 @@ export class Simulator {
     runtime.event.status_type = "finished";
     runtime.event.is_live = false;
     this.clearEventTimers(runtime);
-    const winner = this.pickWinner(runtime);
+    const winner = preferredWinner ?? this.pickWinner(runtime);
     this.emit("event.set_finished", {
       event_id: runtime.event.event_id,
       result_id: winner.outcome_type_id,

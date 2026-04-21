@@ -11,6 +11,19 @@ const html = (response, statusCode, payload) => {
   response.end(payload);
 };
 
+const readJsonBody = async (request) => {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(chunk);
+  }
+
+  if (chunks.length === 0) {
+    return {};
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+};
+
 const notFound = (response) => json(response, 404, { error: "not_found" });
 
 const renderDashboard = () => `<!doctype html>
@@ -162,6 +175,13 @@ const renderDashboard = () => `<!doctype html>
       gap: 14px;
     }
 
+     .event-details {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.95fr);
+      gap: 14px;
+      align-items: start;
+    }
+
     .markets {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -180,6 +200,19 @@ const renderDashboard = () => `<!doctype html>
       margin-bottom: 10px;
     }
 
+    .market-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: start;
+      margin-bottom: 10px;
+    }
+
+    .market-meta, .outcome-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
     .outcome {
       display: flex;
       justify-content: space-between;
@@ -191,6 +224,66 @@ const renderDashboard = () => `<!doctype html>
     }
 
     .outcome:first-of-type { border-top: 0; }
+
+    .outcome-main {
+      display: grid;
+      gap: 3px;
+    }
+
+    .settlement {
+      background: rgba(17, 24, 45, 0.62);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .settlement-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .settlement-row {
+      display: grid;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    select, button {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: #0f1730;
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+      background: linear-gradient(180deg, #7c9cff, #5b76d6);
+      border-color: transparent;
+      font-weight: 600;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.7;
+    }
+
+    .settlement-status {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .settlement-status.error { color: #ff9b9b; }
+    .settlement-status.success { color: #9ef0b8; }
 
     .empty {
       padding: 24px;
@@ -217,6 +310,7 @@ const renderDashboard = () => `<!doctype html>
     @media (max-width: 900px) {
       .hero, .content { grid-template-columns: 1fr; display: grid; }
       .meta { text-align: left; }
+      .event-details { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -256,6 +350,7 @@ const renderDashboard = () => `<!doctype html>
     const snapshotMetaNode = document.getElementById("snapshot-meta");
     const refreshStatusNode = document.getElementById("refresh-status");
     const lastUpdatedNode = document.getElementById("last-updated");
+    const settlementState = new Map();
 
     const statCard = (label, value) => (
       '<div class="card">' +
@@ -271,19 +366,57 @@ const renderDashboard = () => `<!doctype html>
       '\"': "&quot;"
     }[char]));
 
+    const getEventSelections = (event) => {
+      const existing = settlementState.get(event.event_id) ?? {};
+      const next = {};
+      for (const market of event.markets) {
+        const selectedOutcomeId = existing[market.market_id];
+        if (market.outcomes.some((outcome) => outcome.outcome_id === selectedOutcomeId)) {
+          next[market.market_id] = selectedOutcomeId;
+        }
+      }
+      settlementState.set(event.event_id, next);
+      return next;
+    };
+
+    const renderOutcomeOption = (outcome, selectedOutcomeId) => (
+      '<option value="' + esc(outcome.outcome_id) + '"' + (outcome.outcome_id === selectedOutcomeId ? ' selected' : '') + '>' +
+        esc(outcome.outcome_name) + ' (#' + esc(outcome.outcome_id) + ', type ' + esc(outcome.outcome_type_id) + ', ' + esc(outcome.outcome_coef) + ')' +
+      '</option>'
+    );
+
     const renderEvent = (event) => {
       const statusClass = esc(event.status_type);
       const score = event.score ? '<span class="pill">Score ' + esc(event.score) + '</span>' : "";
       const startsAt = new Date(event.event_dt * 1000).toLocaleString();
+      const selections = getEventSelections(event);
       const markets = event.markets.map((market) => (
         '<div class="market">' +
-          '<h3>' + esc(market.market_name) + ' ' + (market.market_suspend === "yes" ? '<span class="pill">Suspended</span>' : "") + '</h3>' +
+          '<div class="market-head">' +
+            '<div>' +
+              '<h3>' + esc(market.market_name) + '</h3>' +
+              '<div class="market-meta">Market #' + esc(market.market_id) + ' • Template ' + esc(market.market_template_id) + ' • Result type ' + esc(market.result_type_id) + '</div>' +
+            '</div>' +
+            (market.market_suspend === "yes" ? '<span class="pill">Suspended</span>' : '') +
+          '</div>' +
           market.outcomes.map((outcome) => (
             '<div class="outcome">' +
-              '<span>' + esc(outcome.outcome_name) + '</span>' +
+              '<div class="outcome-main">' +
+                '<span>' + esc(outcome.outcome_name) + '</span>' +
+                '<div class="outcome-meta">Outcome #' + esc(outcome.outcome_id) + ' • Type ' + esc(outcome.outcome_type_id) + (outcome.participant_id ? ' • Participant #' + esc(outcome.participant_id) : '') + '</div>' +
+              '</div>' +
               '<strong>' + esc(outcome.outcome_coef) + '</strong>' +
             '</div>'
           )).join("") +
+        '</div>'
+      )).join("");
+      const settlementControls = event.markets.map((market) => (
+        '<div class="settlement-row">' +
+          '<label for="settle-' + esc(event.event_id) + '-' + esc(market.market_id) + '">' + esc(market.market_name) + ' (#' + esc(market.market_id) + ')</label>' +
+          '<select id="settle-' + esc(event.event_id) + '-' + esc(market.market_id) + '" data-event-id="' + esc(event.event_id) + '" data-market-id="' + esc(market.market_id) + '">' +
+            '<option value="">Choose winner</option>' +
+            market.outcomes.map((outcome) => renderOutcomeOption(outcome, selections[market.market_id])).join("") +
+          '</select>' +
         '</div>'
       )).join("");
 
@@ -304,11 +437,94 @@ const renderDashboard = () => `<!doctype html>
           '</div>' +
           '<div class="event-body">' +
             '<div class="small">Event #' + esc(event.event_id) + ' • Participants: ' + event.participants.map((participant) => esc(participant.participant_name)).join(' vs ') + '</div>' +
-            '<div class="markets">' + (markets || '<div class="empty">No markets</div>') + '</div>' +
+            '<div class="event-details">' +
+              '<div class="markets">' + (markets || '<div class="empty">No markets</div>') + '</div>' +
+              '<form class="settlement" data-event-id="' + esc(event.event_id) + '">' +
+                '<div>' +
+                  '<h3>Force Settle</h3>' +
+                  '<div class="small">Pick a winner for each market, then settle the event immediately.</div>' +
+                '</div>' +
+                '<div class="settlement-grid">' + settlementControls + '</div>' +
+                '<button type="submit">Settle Event</button>' +
+                '<div class="settlement-status" id="settlement-status-' + esc(event.event_id) + '"></div>' +
+              '</form>' +
+            '</div>' +
           '</div>' +
         '</section>'
       );
     };
+
+    const updateSelection = (eventId, marketId, outcomeId) => {
+      const selections = settlementState.get(eventId) ?? {};
+      if (outcomeId) {
+        selections[marketId] = Number(outcomeId);
+      } else {
+        delete selections[marketId];
+      }
+      settlementState.set(eventId, selections);
+    };
+
+    const setSettlementStatus = (eventId, message, tone) => {
+      const node = document.getElementById('settlement-status-' + eventId);
+      if (!node) {
+        return;
+      }
+      node.textContent = message;
+      node.className = 'settlement-status' + (tone ? ' ' + tone : '');
+    };
+
+    const settleEvent = async (eventId, submitter) => {
+      const selections = settlementState.get(eventId) ?? {};
+      const eventCard = submitter.closest('.event-card');
+      const marketCount = eventCard ? eventCard.querySelectorAll('select[data-market-id]').length : 0;
+      if (Object.keys(selections).length !== marketCount) {
+        setSettlementStatus(eventId, 'Choose a winner for every market first.', 'error');
+        return;
+      }
+
+      submitter.disabled = true;
+      setSettlementStatus(eventId, 'Settling event...', '');
+
+      try {
+        const response = await fetch('/scenario/settle/' + eventId, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ winners: selections })
+        });
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || 'settlement_failed');
+        }
+        settlementState.delete(eventId);
+        setSettlementStatus(eventId, 'Event settled.', 'success');
+        await refresh();
+      } catch (error) {
+        setSettlementStatus(eventId, String(error.message || error), 'error');
+      } finally {
+        submitter.disabled = false;
+      }
+    };
+
+    eventsNode.addEventListener('change', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement) || !target.dataset.eventId || !target.dataset.marketId) {
+        return;
+      }
+      updateSelection(Number(target.dataset.eventId), Number(target.dataset.marketId), target.value);
+    });
+
+    eventsNode.addEventListener('submit', (event) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || !form.dataset.eventId) {
+        return;
+      }
+      event.preventDefault();
+      const submitter = form.querySelector('button[type="submit"]');
+      if (!(submitter instanceof HTMLButtonElement)) {
+        return;
+      }
+      settleEvent(Number(form.dataset.eventId), submitter);
+    });
 
     const render = (health, state) => {
       statsNode.innerHTML = [
@@ -359,7 +575,7 @@ const renderDashboard = () => `<!doctype html>
 </body>
 </html>`;
 
-export const createControlServer = ({ simulator, getConnectedClients }) => createServer((request, response) => {
+export const createControlServer = ({ simulator, getConnectedClients }) => createServer(async (request, response) => {
   const method = request.method ?? "GET";
   const url = new URL(request.url ?? "/", "http://localhost");
 
@@ -417,13 +633,25 @@ export const createControlServer = ({ simulator, getConnectedClients }) => creat
     return;
   }
 
-  const odds = url.pathname.match(/^\/scenario\/odds\/(\d+)$/);
-  if (method === "POST" && odds) {
-    const coef = Number.parseFloat(url.searchParams.get("coef") ?? "");
-    const ok = Number.isFinite(coef) && simulator.setOutcomeOdds(Number.parseInt(odds[1], 10), coef);
-    json(response, ok ? 200 : 404, { ok });
-    return;
-  }
+    const odds = url.pathname.match(/^\/scenario\/odds\/(\d+)$/);
+    if (method === "POST" && odds) {
+      const coef = Number.parseFloat(url.searchParams.get("coef") ?? "");
+      const ok = Number.isFinite(coef) && simulator.setOutcomeOdds(Number.parseInt(odds[1], 10), coef);
+      json(response, ok ? 200 : 404, { ok });
+      return;
+    }
+
+    const settle = url.pathname.match(/^\/scenario\/settle\/(\d+)$/);
+    if (method === "POST" && settle) {
+      try {
+        const body = await readJsonBody(request);
+        const ok = simulator.settleEvent(Number.parseInt(settle[1], 10), body.winners);
+        json(response, ok ? 200 : 404, ok ? { ok } : { ok, error: "invalid_settlement" });
+      } catch {
+        json(response, 400, { ok: false, error: "invalid_json" });
+      }
+      return;
+    }
 
   notFound(response);
 });

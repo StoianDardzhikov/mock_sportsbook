@@ -133,3 +133,45 @@ test("dashboard route serves HTML", async () => {
     await app.close();
   }
 });
+
+test("manual settlement endpoint finishes event with selected winner", async () => {
+  const app = await startApp(loadConfig({
+    MOCK_TCP_PORT: "7927",
+    MOCK_HTTP_PORT: "7928",
+    MOCK_TARGET_EVENT_COUNT: "1",
+    MOCK_EVENT_LIFETIME_MIN_SECONDS: "30",
+    MOCK_EVENT_LIFETIME_MAX_SECONDS: "30",
+    MOCK_SEED: "99"
+  }));
+
+  try {
+    const snapshotResponse = await fetch("http://127.0.0.1:7928/state");
+    const snapshot = await snapshotResponse.json();
+    const event = snapshot.activeEvents[0];
+    assert.ok(event);
+
+    const winners = Object.fromEntries(event.markets.map((market) => [market.market_id, market.outcomes[0].outcome_id]));
+    const firstWinner = event.markets[0].outcomes[0];
+
+    const settleResponse = await fetch(`http://127.0.0.1:7928/scenario/settle/${event.event_id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ winners })
+    });
+    const settleBody = await settleResponse.json();
+
+    assert.equal(settleResponse.status, 200);
+    assert.deepEqual(settleBody, { ok: true });
+
+    const settledSnapshotResponse = await fetch("http://127.0.0.1:7928/state");
+    const settledSnapshot = await settledSnapshotResponse.json();
+    const settledEvent = settledSnapshot.activeEvents.find((entry) => entry.event_id === event.event_id);
+
+    assert.ok(settledEvent);
+    assert.equal(settledEvent.status_type, "finished");
+    assert.equal(settledEvent.is_live, false);
+    assert.equal(firstWinner.outcome_type_id, event.markets[0].outcomes[0].outcome_type_id);
+  } finally {
+    await app.close();
+  }
+});
